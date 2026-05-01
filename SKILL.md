@@ -95,9 +95,40 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 
 ---
 
-## 输出格式（必须严格遵守）
+## 输出形态
 
-输出一份 Markdown 报告，结构如下（示例使用 Java）：
+**输出一个目录，不是单个文件。** 目录名建议 `<入口函数名>-dataflow/`（用户已指定路径则尊重用户）。这样做有三个好处：分析过程中可以**增量落盘**、复杂报告可以**按 flow 拆分**、各 flow 文件**彼此独立**互不干扰。
+
+### 文件布局
+
+- **简单情形**（1–2 条 flow、路径短、无大量待确认项）：目录里放一个 `report.md` 即可，所有内容内联。
+- **复杂情形**（多条 flow、跨多文件长链路、有多个 Open Questions）：按下列结构拆分，每条 flow 一个独立文件：
+
+  ```
+  <function>-dataflow/
+  ├── index.md          # 入口、Sources、Sinks 总览、Flow 索引、Unreached、Open Questions
+  ├── flow-F1.md        # 单条 Flow 完整描述，自包含
+  ├── flow-F2.md
+  └── ...
+  ```
+
+### 增量写出
+
+每分析完**一条 flow**（或一个可独立成立的小模块）就**立即落盘**——不要囤到全部分析完再一次性输出。这样：
+
+- 中途被打断时已分析的部分不会丢。
+- 阅读者可以边看边校，避免后期才发现整体方向跑偏。
+- 后续若需要补充（例如新发现一个 sink）追加文件、追写 `index.md` 即可，不必重写已经写好的 flow 文件。
+
+### Flow 文件之间的独立性
+
+每个 `flow-Fx.md` 必须**自包含**：在文件内部重述该条 flow 涉及的 source / sink 摘要、调用链、步骤、校验、转换、最终表达式，**不依赖** `index.md` 也能独立看懂。同一段被多条 flow 共用的代码，可以在多个文件里各自出现，措辞可以不同——目的是让每条 flow 的分析尽量不被另一条干扰。
+
+---
+
+## 输出格式（每个文件的结构必须严格遵守，示例使用 Java）
+
+### `index.md`（或简单情形下的 `report.md`）
 
 ```markdown
 # 数据流报告：UserFileService.deleteUserFile
@@ -117,24 +148,11 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 - K2：命令执行 — `Runtime.getRuntime().exec(cmd)` 位于 `src/main/java/com/example/Runner.java:42`
 - K3：文件写入 — `Files.write(logPath, bytes)` 位于 `src/main/java/com/example/AuditLog.java:27`  *(无污点：`logPath` 由常量 `LOG_DIR` 与当前进程 PID 拼接，没有 source 流入)*
 
-## 传播路径（Flows）
+## 传播路径索引
+- F1：S1 → K1（文件删除） — 详见 `flow-F1.md`
+- F2：S3 → K2（命令执行） — 详见 `flow-F2.md`
 
-### Flow F1：S1 → K1（文件删除）
-- 调用链：`UserFileService#deleteUserFile` → `PathBuilder#buildAndRemove`
-- 步骤：
-  1. `UserFileService.java:24` — `if (name.contains("..")) throw new IllegalArgumentException(...)`（校验：包含 ".." 时抛出 IllegalArgumentException，命中 → 抛错；未命中 → 继续）
-  2. `UserFileService.java:27` — `PathBuilder.buildAndRemove(name)`（跨方法调用，污点跟随到形参 `n`）
-  3. `PathBuilder.java:17` — `Path target = Paths.get(BASE_DIR, n)`（转换：与常量 `BASE_DIR="/var/data"` 拼接）
-  4. `PathBuilder.java:18` — `Files.delete(target)`（命中 sink K1）
-- 路径上的校验：
-  - V1 @ `UserFileService.java:24` — `name.contains("..")` 命中即抛 IllegalArgumentException
-- 路径上的转换：
-  - T1 @ `PathBuilder.java:17` — 路径拼接：`Paths.get(<常量 "/var/data">, <带污点 n>)`
-- 到达 sink 时的最终表达式：`Files.delete(Paths.get("/var/data", name))`，前置经过 V1
-- 备注：无
-
-### Flow F2：S3 → K2（命令执行）
-…（结构同上）
+> 简单情形（单文件 `report.md`）：把上面索引替换为各 flow 的完整章节内联展开（结构见下方 flow 文件模板的"摘要"以下部分）。
 
 ## 未流出的输入源（Unreached Sources）
 - S2（`APP_BASE_DIR`）：仅作为常量前缀使用，未传播到任何被跟踪的 sink 类型。
@@ -144,10 +162,39 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 - `FileHandler.java:31` 处的分支取决于运行时配置 `cfg.strictMode`；上述路径已枚举两个分支。
 ```
 
-字段说明：
+### `flow-Fx.md`
+
+```markdown
+# Flow F1：S1 → K1（文件删除）
+
+## 摘要
+- Source S1：参数 `name`（String），引入于 `UserFileService.java:23`
+- Sink K1：`Files.delete(target)` 位于 `PathBuilder.java:18`，类别=文件删除
+- 调用链：`UserFileService#deleteUserFile` → `PathBuilder#buildAndRemove`
+
+## 步骤
+1. `UserFileService.java:24` — `if (name.contains("..")) throw new IllegalArgumentException(...)`（校验：包含 ".." 时抛出 IllegalArgumentException，命中 → 抛错；未命中 → 继续）
+2. `UserFileService.java:27` — `PathBuilder.buildAndRemove(name)`（跨方法调用，污点跟随到形参 `n`）
+3. `PathBuilder.java:17` — `Path target = Paths.get(BASE_DIR, n)`（转换：与常量 `BASE_DIR="/var/data"` 拼接）
+4. `PathBuilder.java:18` — `Files.delete(target)`（命中 sink K1）
+
+## 路径上的校验
+- V1 @ `UserFileService.java:24` — `name.contains("..")` 命中即抛 IllegalArgumentException
+
+## 路径上的转换
+- T1 @ `PathBuilder.java:17` — 路径拼接：`Paths.get(<常量 "/var/data">, <带污点 n>)`
+
+## 到达 sink 时的最终表达式
+`Files.delete(Paths.get("/var/data", name))`，前置经过 V1。
+
+## 备注
+无。
+```
+
+### 字段说明
 
 - **命中的关键操作点（Sinks）**：函数及其调用链上**全部**命中的 sink；与本次 source 无关的，在条目末尾用斜体 `*(无污点：<理由>)*` 注明为何不出现在下面的 Flows。
-- **传播路径（Flows）**：仅为有 source → sink 传播的链路展开；每条路径都要给出调用链、逐步的步骤、路径上的校验/转换、到达 sink 时的最终表达式。
+- **传播路径（Flows / 各 `flow-Fx.md`）**：仅为有 source → sink 传播的链路展开；每条路径都要给出调用链、逐步的步骤、路径上的校验/转换、到达 sink 时的最终表达式。
 - **未流出的输入源（Unreached Sources）**：被列入 Sources 但没有传播到任何 sink 的输入，简述其去向（仅作前缀、被丢弃、被某次校验阻断等）。
 - **待确认问题（Open Questions）**：未解析的外部调用、未跟到底的动态分派、需要人工确认的语义假设，以**问题**形式陈述，不下结论。
 
