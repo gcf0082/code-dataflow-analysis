@@ -10,8 +10,7 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 1. **语言无关**。方法论适用于任何语言；遇到具体语言时只需把"赋值/调用/字段访问/集合元素/字符串拼接/反序列化"等通用概念映射到该语言的语法即可。SKILL.md 不内置语言专属规则。
 2. **只陈述事实，不下安全结论**。报告中可以写"该路径上未发现对 `path` 的规范化或路径遍历过滤"，**不要写**"存在路径穿越漏洞"。是否构成风险，由阅读报告的人结合上下文判断。
 3. **完备性 > 简洁性**。若某外部输入流向多个 sink，全部列出；若有多条路径到同一 sink，都列出（按可达性合并明显冗余的分支即可）。
-4. **不可达的不写**。如果某条路径明显被前置条件 short-circuit 掉（例如 `if False:` / 死代码 / 提前 return），如实标注并跳过。
-5. **遇到不确定的诚实标注**。看不到实现的库调用、动态分派、反射、跨进程/跨服务调用，使用 `[unresolved]` / `[external]` / `[dynamic]` 等标签，不要瞎猜。
+4. **遇到不确定的诚实标注**。看不到实现的库调用、动态分派、反射、跨进程/跨服务调用，使用 `[unresolved]` / `[external]` / `[dynamic]` 等标签，不要瞎猜。
 
 ---
 
@@ -45,7 +44,7 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 | 模板 / 渲染 | 模板引擎渲染、HTML/SQL 拼接输出 |
 | 日志 / 出口 | 写日志、上报指标（仅在涉及外发时记录） |
 
-碰到一个调用，先问"它的副作用属于哪一类"。属于上表的就标为 sink。**只关心被 source 数据触达的 sink**——与污点无关的 sink 可以不写。
+碰到一个调用，先问"它的副作用属于哪一类"。属于上表的就标为 sink。**所有命中的 sink 都要列出**，包括与本次 source 数据无关的——但要在条目下注明它为什么与污点无关（例如"参数全部为常量"、"参数来自另一条已结束的链"、"输入由独立的内部状态构造"），便于读者确认你确实考察过它。
 
 ### Step 3 — 前向传播跟踪（Forward Data Flow + Call Chain）
 
@@ -98,9 +97,7 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 
 ## 输出格式（必须严格遵守）
 
-对每次分析都输出**两部分**：先一段精简的人类可读 Markdown，再附一段等价的 JSON（便于工具处理）。两者信息一致。
-
-### Markdown 部分
+输出一份 Markdown 报告，结构如下：
 
 ```markdown
 # Dataflow Report: <FunctionName>
@@ -119,6 +116,7 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 ## Sinks Reached
 - K1: file.delete — `os.remove(target)` at `path/to/util.ext:LN`
 - K2: command.exec — `exec.Command("sh", "-c", cmd)` at `path/to/runner.ext:LN`
+- K3: file.write — `open(log_path, "a")` at `path/to/log.ext:LN`  *(untainted: `log_path` 由内部常量 + 进程 PID 构造，无 source 流入)*
   ...
 
 ## Flows
@@ -150,54 +148,12 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 - Branch at `handler.ext:LN` depends on runtime config `cfg.strict_mode`; both branches enumerated above.
 ```
 
-### JSON 部分
+字段说明：
 
-```json
-{
-  "entry": {
-    "function": "pkg.module.FunctionName",
-    "signature": "FunctionName(arg1, arg2)",
-    "location": "path/to/file.ext:LN",
-    "language": "go"
-  },
-  "sources": [
-    {"id": "S1", "kind": "parameter", "name": "arg1", "type": "string", "location": "path/to/file.ext:LN"},
-    {"id": "S3", "kind": "http-body", "name": "payload.name", "type": "string", "location": "path/to/handler.ext:LN"}
-  ],
-  "sinks": [
-    {"id": "K1", "category": "file.delete", "call": "os.remove(target)", "location": "path/to/util.ext:LN"},
-    {"id": "K2", "category": "command.exec", "call": "exec.Command(\"sh\",\"-c\",cmd)", "location": "path/to/runner.ext:LN"}
-  ],
-  "flows": [
-    {
-      "id": "F1",
-      "source": "S1",
-      "sink": "K1",
-      "call_chain": ["FunctionName", "buildPath", "removeIfExists"],
-      "steps": [
-        {"location": "file.ext:LN", "kind": "assign", "expr": "name = arg1"},
-        {"location": "file.ext:LN", "kind": "validation", "expr": "\"..\" in name", "on_fail": "raise", "on_pass": "continue"},
-        {"location": "file.ext:LN", "kind": "call", "expr": "buildPath(name)", "taint_into": "n"},
-        {"location": "util.ext:LN", "kind": "transform", "op": "concat", "expr": "target = base_dir + \"/\" + n", "constants": ["base_dir", "/"]},
-        {"location": "util.ext:LN", "kind": "call", "expr": "removeIfExists(target)"},
-        {"location": "util.ext:LN", "kind": "sink", "sink": "K1", "expr": "os.remove(target)"}
-      ],
-      "validations": [
-        {"id": "V1", "location": "file.ext:LN", "predicate": "\"..\" in name", "on_fail": "raise"}
-      ],
-      "transformations": [
-        {"id": "T1", "location": "util.ext:LN", "op": "concat", "constants": ["base_dir", "/"]}
-      ],
-      "final_expr_at_sink": "os.remove(base_dir + \"/\" + arg1) [after V1]"
-    }
-  ],
-  "unreached_sources": ["S2"],
-  "open_questions": [
-    "removeIfExists -> third-party fs_helper.Drop semantics not resolved",
-    "branch on cfg.strict_mode enumerated both sides"
-  ]
-}
-```
+- **Sinks Reached**：函数及其调用链上**全部**命中的 sink；与本次 source 无关的，在条目末尾用斜体备注 `*(untainted: <理由>)*` 说明为何不参与下面的 Flows。
+- **Flows**：仅为有 source → sink 传播的链路展开。
+- **Unreached Sources**：列出但未流到任何 sink 的 source，简述其去向。
+- **Open Questions**：未解析的外部调用、未跟到底的动态分派、需要人工确认的语义假设，以问题形式陈述，不下结论。
 
 ---
 
