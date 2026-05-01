@@ -97,63 +97,59 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 
 ## 输出格式（必须严格遵守）
 
-输出一份 Markdown 报告，结构如下：
+输出一份 Markdown 报告，结构如下（示例使用 Java）：
 
 ```markdown
-# Dataflow Report: <FunctionName>
+# 数据流报告：UserFileService.deleteUserFile
 
-## Entry
-- Function: `pkg.module.FunctionName(arg1, arg2, ...)`
-- Location: `path/to/file.ext:LN`
-- Language: <java | python | go | rust | js | ts | ...>
+## 入口
+- 函数：`com.example.UserFileService#deleteUserFile(String name, User user)`
+- 位置：`src/main/java/com/example/UserFileService.java:23`
+- 语言：java
 
-## Sources
-- S1: param `arg1` (type=<...>, kind=parameter)
-- S2: env `APP_BASE_DIR` read at `path/to/file.ext:LN` (kind=env)
-- S3: HTTP body field `payload.name` at `path/to/handler.ext:LN` (kind=http-body)
-  ...
+## 输入源（Sources）
+- S1：参数 `name`（类型=String，来源=方法形参）
+- S2：环境变量 `APP_BASE_DIR`，读取于 `src/main/java/com/example/Config.java:14`（来源=环境）
+- S3：HTTP 请求体字段 `payload.name`，引入于 `src/main/java/com/example/FileHandler.java:31`（来源=HTTP 请求体）
 
-## Sinks Reached
-- K1: file.delete — `os.remove(target)` at `path/to/util.ext:LN`
-- K2: command.exec — `exec.Command("sh", "-c", cmd)` at `path/to/runner.ext:LN`
-- K3: file.write — `open(log_path, "a")` at `path/to/log.ext:LN`  *(untainted: `log_path` 由内部常量 + 进程 PID 构造，无 source 流入)*
-  ...
+## 命中的关键操作点（Sinks）
+- K1：文件删除 — `Files.delete(target)` 位于 `src/main/java/com/example/PathBuilder.java:18`
+- K2：命令执行 — `Runtime.getRuntime().exec(cmd)` 位于 `src/main/java/com/example/Runner.java:42`
+- K3：文件写入 — `Files.write(logPath, bytes)` 位于 `src/main/java/com/example/AuditLog.java:27`  *(无污点：`logPath` 由常量 `LOG_DIR` 与当前进程 PID 拼接，没有 source 流入)*
 
-## Flows
+## 传播路径（Flows）
 
-### Flow F1: S1 → K1 (file.delete)
-- Call chain: `FunctionName` → `buildPath` → `removeIfExists`
-- Steps:
-  1. `path/to/file.ext:LN` — `name = arg1` (assignment)
-  2. `path/to/file.ext:LN` — `if ".." in name: raise` (validation: reject containing "..", failure → raise)
-  3. `path/to/file.ext:LN` — `buildPath(name)` (call, taint follows into param `n`)
-  4. `path/to/util.ext:LN` — `target = base_dir + "/" + n` (transform: concat with constant `base_dir`)
-  5. `path/to/util.ext:LN` — `removeIfExists(target)` (call)
-  6. `path/to/util.ext:LN` — `os.remove(target)` (sink K1)
-- Validations on path:
-  - V1 @ file.ext:LN — `".." in name` rejects → raise
-- Transformations on path:
-  - T1 @ util.ext:LN — concat: `<const base_dir> + "/" + <tainted name>`
-- Final expression at sink: `os.remove(<const base_dir> + "/" + arg1)` after V1
-- Notes: none
+### Flow F1：S1 → K1（文件删除）
+- 调用链：`UserFileService#deleteUserFile` → `PathBuilder#buildAndRemove`
+- 步骤：
+  1. `UserFileService.java:24` — `if (name.contains("..")) throw new IllegalArgumentException(...)`（校验：包含 ".." 时抛出 IllegalArgumentException，命中 → 抛错；未命中 → 继续）
+  2. `UserFileService.java:27` — `PathBuilder.buildAndRemove(name)`（跨方法调用，污点跟随到形参 `n`）
+  3. `PathBuilder.java:17` — `Path target = Paths.get(BASE_DIR, n)`（转换：与常量 `BASE_DIR="/var/data"` 拼接）
+  4. `PathBuilder.java:18` — `Files.delete(target)`（命中 sink K1）
+- 路径上的校验：
+  - V1 @ `UserFileService.java:24` — `name.contains("..")` 命中即抛 IllegalArgumentException
+- 路径上的转换：
+  - T1 @ `PathBuilder.java:17` — 路径拼接：`Paths.get(<常量 "/var/data">, <带污点 n>)`
+- 到达 sink 时的最终表达式：`Files.delete(Paths.get("/var/data", name))`，前置经过 V1
+- 备注：无
 
-### Flow F2: S3 → K2 (command.exec)
-... (同上结构)
+### Flow F2：S3 → K2（命令执行）
+…（结构同上）
 
-## Unreached Sources
-- S2 (`APP_BASE_DIR`): used as constant prefix only; not propagated to any tracked sink type.
+## 未流出的输入源（Unreached Sources）
+- S2（`APP_BASE_DIR`）：仅作为常量前缀使用，未传播到任何被跟踪的 sink 类型。
 
-## Open Questions
-- `removeIfExists` calls `fs_helper.Drop(target)` from third-party crate `xfs v0.4`; behavior of `Drop` not resolved — treated as terminal sink K1 here. Please confirm whether `Drop` performs additional checks.
-- Branch at `handler.ext:LN` depends on runtime config `cfg.strict_mode`; both branches enumerated above.
+## 待确认问题（Open Questions）
+- `PathBuilder#buildAndRemove` 内部调用 `com.thirdparty.fs.Cleaner.drop(target)`（来自 fs-helper 1.4）；`drop` 的行为未解析，此处当作终止 sink K1 处理。请确认 `drop` 是否还有额外校验。
+- `FileHandler.java:31` 处的分支取决于运行时配置 `cfg.strictMode`；上述路径已枚举两个分支。
 ```
 
 字段说明：
 
-- **Sinks Reached**：函数及其调用链上**全部**命中的 sink；与本次 source 无关的，在条目末尾用斜体备注 `*(untainted: <理由>)*` 说明为何不参与下面的 Flows。
-- **Flows**：仅为有 source → sink 传播的链路展开。
-- **Unreached Sources**：列出但未流到任何 sink 的 source，简述其去向。
-- **Open Questions**：未解析的外部调用、未跟到底的动态分派、需要人工确认的语义假设，以问题形式陈述，不下结论。
+- **命中的关键操作点（Sinks）**：函数及其调用链上**全部**命中的 sink；与本次 source 无关的，在条目末尾用斜体 `*(无污点：<理由>)*` 注明为何不出现在下面的 Flows。
+- **传播路径（Flows）**：仅为有 source → sink 传播的链路展开；每条路径都要给出调用链、逐步的步骤、路径上的校验/转换、到达 sink 时的最终表达式。
+- **未流出的输入源（Unreached Sources）**：被列入 Sources 但没有传播到任何 sink 的输入，简述其去向（仅作前缀、被丢弃、被某次校验阻断等）。
+- **待确认问题（Open Questions）**：未解析的外部调用、未跟到底的动态分派、需要人工确认的语义假设，以**问题**形式陈述，不下结论。
 
 ---
 
