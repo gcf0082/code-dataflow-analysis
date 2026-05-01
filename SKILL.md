@@ -39,6 +39,14 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 
 **所有命中的 sink 都要列出**，与本次 source 无关的在条目末尾注明理由（`*(无污点：<理由>)*`），便于读者确认你考察过它。
 
+**默认影响等级**：影响等级是 sink **操作类型的固有属性**，不是对该段代码的安全判定。它只反映"这种类型的操作普遍后果重不重"，**不参考链路上的校验/转换是否充分**（那些读者据 flow 自行评估）。等级只看 sink 类型，**不允许按上下文覆盖**。
+
+| 影响 | 涵盖的 sink 行为 |
+|---|---|
+| 高 | 命令/进程执行、`eval`/动态加载；反序列化（不可信源）；文件写/删/改权限/改名/创建链接/解压；DB/存储**写入**；外发网络（连接外部主机/服务）；鉴权变更（签发 token / 改 session / 改 ACL）；模板渲染输出（HTML/SQL 拼接给客户端或 DB） |
+| 中 | 文件读/移；DB/存储**查询读**；内部 RPC；缓存写入；外发日志/指标上报 |
+| 低 | 反序列化（可信本地源/常量资源）；配置读；本地日志；鉴权读（消费身份判定结果）；网络监听 |
+
 ### Step 3 — 前向传播跟踪
 
 从每个 source 沿数据流走向 sink；途中保持以下处理：
@@ -118,9 +126,9 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 - S4：HTTP 请求体字段 `payload.note`，引入于 `src/main/java/com/example/FileHandler.java:31`（来源=HTTP 请求体）
 
 ## 命中的关键操作点（Sinks）
-- K1：文件删除 — `Files.delete(target)` 位于 `src/main/java/com/example/PathBuilder.java:18`
-- K2：命令执行 — `Runtime.getRuntime().exec(cmd)` 位于 `src/main/java/com/example/Runner.java:42`
-- K3：文件写入 — `Files.write(logPath, bytes)` 位于 `src/main/java/com/example/AuditLog.java:27`  *(无污点：`logPath` 由常量 `LOG_DIR` 与当前进程 PID 拼接，没有 source 流入)*
+- K1：文件删除 [影响=高] — `Files.delete(target)` 位于 `src/main/java/com/example/PathBuilder.java:18`
+- K2：命令执行 [影响=高] — `Runtime.getRuntime().exec(cmd)` 位于 `src/main/java/com/example/Runner.java:42`
+- K3：文件写入 [影响=高] — `Files.write(logPath, bytes)` 位于 `src/main/java/com/example/AuditLog.java:27`  *(无污点：`logPath` 由常量 `LOG_DIR` 与当前进程 PID 拼接，没有 source 流入)*
 
 ## 传播路径索引
 - F1：{S1, S2} → K1（文件删除）— 详见 `flow-F1.md`
@@ -144,7 +152,7 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 ## 摘要
 - Source S1：参数 `userId`（String），引入于 `UserFileService.java:23`
 - Source S2：参数 `name`（String），引入于 `UserFileService.java:23`
-- Sink K1：`Files.delete(target)` 位于 `PathBuilder.java:18`，类别=文件删除
+- Sink K1：`Files.delete(target)` 位于 `PathBuilder.java:18`，类别=文件删除，影响=高
 - 调用链：`UserFileService#deleteUserFile` → `PathBuilder#buildAndRemove`
 - 合并理由：`userId` 与 `name` 共同决定要删的文件位置，沿同一条调用链流向同一个 sink，拆开会反复重述同一段链路。
 
@@ -193,6 +201,7 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 - **Sinks**：全部命中的都列；与污点无关的标 `*(无污点：<理由>)*`。
 - **Flow 标题**：单 source `Fx：S1→K1`；多 source `Fx：{S1,S2}→K1`，摘要给"合并理由"一行。
 - **`utils-verified.md`**：可选输出。每核对完一个通用工具方法且实现与契约相符就追加一条；不符或未完整核对的不进此文件。
+- **影响等级**：每个 sink 条目必填。值取自 Step 2 的"默认影响等级"速查表，按 sink 操作类型的固有属性确定，**不随上下文升降**——常量目标、已有校验等情境通过最终表达式与 `*(无污点：…)*` 等其它字段呈现。
 
 ---
 
