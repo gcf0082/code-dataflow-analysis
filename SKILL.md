@@ -5,10 +5,6 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 
 # 通用代码数据流与调用链分析
 
-本 skill 的目的：给定一个函数作为入口，**如实**梳理外部输入参数到关键 sink 的传播路径，输出一份结构化报告，**不做风险判定**，由人来基于报告做后续审计。
-
----
-
 ## 适用范围与基本原则
 
 1. **语言无关**。方法论适用于任何语言；遇到具体语言时只需把"赋值/调用/字段访问/集合元素/字符串拼接/反序列化"等通用概念映射到该语言的语法即可。SKILL.md 不内置语言专属规则。
@@ -32,7 +28,7 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
   - 在 `F` 或其下游调用中读取的**外部数据**：环境变量、命令行参数、stdin、配置文件读入、HTTP/RPC 请求体或 query/header/cookie、消息队列消息、文件读入的不可信内容、远端 RPC 返回值、数据库返回值（视场景）、反序列化对象等。
 - 对每个 source，记录：名称、类型（如能识别）、引入位置（文件:行）、引入方式（参数 / 读环境 / 读请求 / 读文件 …）。
 
-> 注意：是否把"DB 返回值"或"内部 RPC"算 source 取决于上下文。若不确定，**两种方式都列**：默认按 source 处理，但在备注里写明"来源为 DB 字段 X，是否可信请人工判断"。
+> 注意：是否把"DB 返回值"或"内部 RPC"算 source 取决于上下文；不确定时默认按 source 处理，并在备注里注明来源（如"来源为 DB 字段 X，是否可信请人工判断"）。
 
 ### Step 2 — Sink 分类（关键操作点）
 
@@ -97,17 +93,6 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 - 数据被一个**总是抛错或终止**的分支吞掉。
 - 进入 `[external]` 且无法继续 → 记录终点为该外部调用，标注未跟。
 - 出现循环/递归 → 收敛后停止，避免无限展开（标注一次）。
-
----
-
-## 工作步骤（执行时的操作顺序）
-
-1. 让用户/调用者给出**入口函数的位置**（或代码片段）。如果只给了函数名而仓库里有多个同名函数，先列候选请用户确认。
-2. 读取入口函数实现，列出 sources（Step 1）。
-3. 在入口及其调用链所及范围内，**只**抓取与 source 相关的 sink（Step 2、3）。
-4. 对每个 (source, sink) 配对，沿调用链与数据流形成一条或多条 path，逐节点记录校验/转换。
-5. 用下方"输出格式"产出结构化报告。
-6. 在报告末尾的 `Open Questions` 区列出未解析项（外部库语义、动态调用等），**不**自行假设。
 
 ---
 
@@ -218,69 +203,6 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 
 ## 风格与禁忌
 
-- **不要**写"存在 / 可能存在 XX 漏洞 / 攻击面 / 风险"。可以写"路径上未观察到对 `..` / 绝对路径 / 符号链接的处理"。
 - **不要**给修复建议。这是另一项工作。
 - **不要**在事实里夹议论；如果有提示，统一放在 `Open Questions` 中并以问题形式表述。
-- **不要**省略调用链；即便看起来"显然"，也要把链条列清楚——读者依赖它复现思路。
 - **不要**用模糊量词（"很多"、"大量"、"看起来"）。具体到 `文件:行` 和表达式。
-- 语言**不影响**结构。Rust 的 `?`、Go 的 `if err != nil`、Java 的受检异常、JS 的 `await`，都按"控制流变化"如实记录，不要为某种语言加特殊章节。
-
----
-
-## 一个完整的最小示例（虚构）
-
-入口（Python）：
-```python
-# app/handlers.py
-def delete_user_file(name: str, user: User):
-    if ".." in name:
-        raise ValueError("bad name")
-    return _remove(name)
-
-# app/storage.py
-BASE = "/var/data"
-def _remove(n: str):
-    path = BASE + "/" + n
-    os.remove(path)
-```
-
-输出（仅示意，结构与上文一致）：
-
-```markdown
-# Dataflow Report: delete_user_file
-
-## Entry
-- Function: `app.handlers.delete_user_file(name, user)`
-- Location: `app/handlers.py:1`
-- Language: python
-
-## Sources
-- S1: param `name` (type=str, kind=parameter)
-- S2: param `user` (type=User, kind=parameter) — not propagated to any sink
-
-## Sinks Reached
-- K1: file.delete — `os.remove(path)` at `app/storage.py:4`
-
-## Flows
-
-### Flow F1: S1 → K1 (file.delete)
-- Call chain: `delete_user_file` → `_remove`
-- Steps:
-  1. `app/handlers.py:2` — `if ".." in name: raise` (validation; failure → raise ValueError)
-  2. `app/handlers.py:4` — `_remove(name)` (call, taint follows into param `n`)
-  3. `app/storage.py:3` — `path = BASE + "/" + n` (transform: concat with constant `BASE="/var/data"`)
-  4. `app/storage.py:4` — `os.remove(path)` (sink K1)
-- Validations on path:
-  - V1 @ handlers.py:2 — substring `..` rejected → raise
-- Transformations on path:
-  - T1 @ storage.py:3 — concat: `"/var/data" + "/" + <tainted name>`
-- Final expression at sink: `os.remove("/var/data" + "/" + name)` after V1
-
-## Unreached Sources
-- S2 (`user`)
-
-## Open Questions
-- (none)
-```
-
-到此结束——是否构成路径穿越、是否需要 `realpath` 锁定 `/var/data`，由人工基于上述事实自行判断。
