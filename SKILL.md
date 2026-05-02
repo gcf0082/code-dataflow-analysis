@@ -62,9 +62,15 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 
 对污点变量做判断且改变控制流的操作：记位置、表达式、通过/未通过分支的去向。**不评价校验是否充分。**
 
+**噪声门槛**：仅记对污点的**语义**产生约束的校验（如 `..` 包含拒绝、长度上限、白名单匹配、规范化后比较、签名/校验和验证等）。通用空值断言（`Objects.requireNonNull` / `assert x != null`）、纯类型断言（`instanceof` 卫语句）等不单独立项；可在步骤里一句话带过，不进 V 表。
+
 #### (b) 关键转换
 
 改变值形态但不丢污点：记操作类型 + 引入的常量部分。**到达 sink 时的最终表达式要尽量还原**（见模板）。
+
+**噪声门槛**：仅记改变了 sink 处最终表达式**可观察形态**的转换（拼接、格式化、编码、规范化、截断、解析后取字段等）。`toString()` / 不改变实际值的拷贝赋值 / 简单 cast 不单独立项。
+
+**常量与污点的部分着色**：记录拼接/格式化时**显式区分**——常量包裹为 `<常量 "...">`，污点变量包裹为 `<带污点 X>`。最终表达式同样按此格式，避免把 `base + "/" + userId` 整段误读为外部可控。
 
 #### (c) 业务意图（每条 flow 必填）
 
@@ -144,8 +150,8 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 - K3：文件写入 [影响=高] — `Files.write(logPath, bytes)` 位于 `src/main/java/com/example/AuditLog.java:27`  *(无污点：`logPath` 由常量 `LOG_DIR` 与当前进程 PID 拼接，没有 source 流入)*
 
 ## 传播路径索引
-- F1：{S1, S2} → K1（文件删除）— 详见 `flow-F1.md`
-- F2：S4 → K2（命令执行）— 详见 `flow-F2.md`
+- F1：{S1, S2} → K1（文件删除）[fully-traced] — 详见 `flow-F1.md`
+- F2：S4 → K2（命令执行）[cut-off] — 详见 `flow-F2.md`
 
 > 简单情形（单文件 `report.md`）：把上面索引替换为各 flow 的完整章节内联展开（结构见下方 flow 文件模板的"业务意图"以下部分）。
 
@@ -168,6 +174,7 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 - Sink K1：`Files.delete(target)` 位于 `PathBuilder.java:18`，类别=文件删除，影响=高
 - 调用链：`UserFileService#deleteUserFile` → `PathBuilder#buildAndRemove`
 - 合并理由：`userId` 与 `name` 共同决定要删的文件位置，沿同一条调用链流向同一个 sink，拆开会反复重述同一段链路。
+- 完整性：fully-traced  （取值：fully-traced / cut-off / external-boundary / scoped-skipped）
 
 ## 业务意图
 该方法负责按 `userId` 定位用户在数据目录下的子目录，再删除其中名为 `name` 的文件。链路上 `name.contains("..")` 用于阻止跨目录引用；`Paths.get(BASE_DIR, userId, name)` 把最终路径锚定在常量基目录 `/var/data` 之下；`userId` 直接参与路径拼接，路径上未观察到对它的校验。
