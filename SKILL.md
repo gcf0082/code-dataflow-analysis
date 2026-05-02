@@ -92,16 +92,17 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 
   ```
   <function>-dataflow/
-  ├── index.md          # 入口、Sources、Sinks、Flow 索引、Unreached、Open Questions
-  ├── flow-F1.md        # 单条 Flow 完整描述，自包含
+  ├── summary.md          # 极简版（永远生成）
+  ├── index.md            # 入口、Sources、Sinks、Flow 索引、Unreached、Open Questions
+  ├── flow-F1.md          # 单条 Flow 完整描述，自包含
   ├── flow-F2.md
   ├── methods-verified.md # 可选：方法核对记录（追加增量）
   └── ...
   ```
 
-简单情形下 `methods-verified.md` 也单独成文件，不内联到 `report.md`——固定命名便于跨任务复用。
+简单情形下目录里同时有 `report.md` 与 `summary.md`；`methods-verified.md` 也单独成文件，不内联到 `report.md`——固定命名便于跨任务复用。
 
-每分析完一条 flow / 一个独立小模块 / 一次方法核对就**立即落盘**，不要囤到最后。
+每分析完一条 flow / 一个独立小模块 / 一次方法核对就**立即落盘**，不要囤到最后。每条 flow 完成时，对应的极简块同时追写到 `summary.md`。
 
 每个 `flow-Fx.md` **自包含**：重述本条涉及的 source / sink 摘要、调用链、步骤、校验、转换、最终表达式，不依赖 `index.md` 也能独立看懂。多条 flow 共用同一段代码时各自展开，让 flow 之间互不干扰。
 
@@ -177,6 +178,30 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 ## 备注
 无。
 ```
+
+### `summary.md`（永远生成）
+
+每条 flow 一个块，仅含：源 → sink + 关键校验代码片段。**不写**调用链、业务意图、转换、Unreached、Open Questions、备注，也不列与污点无关的 sink。仅作"五秒扫一遍主线"用。
+
+```markdown
+# 极简数据流报告：UserFileService.deleteUserFile
+
+## F1：{userId, name} → 文件删除 (Files.delete) [影响=高]
+- **Sink** `PathBuilder.java:18`：`Files.delete(Paths.get("/var/data", userId, name))`
+- **校验**：
+  - `UserFileService.java:24`：`if (name.contains("..")) throw new IllegalArgumentException(...)`
+  - `userId` 无校验
+
+## F2：payload.note → 命令执行 (Runtime.exec) [影响=高]
+- **Sink** `Runner.java:42`：`Runtime.getRuntime().exec(cmd)`
+- **校验**：路径上无校验
+```
+
+模板规则：
+
+- 标题行：`## F<n>：{<source 标识符...>} → <sink 类别> (<最关键 API>) [影响=高/中/低]`。单 source 时去掉花括号。
+- **Sink** 行：位置 + sink 处的最终表达式形式（能一行写下就一行）。
+- **校验** 行：每条校验的位置和代码片段；某 source 路径上无校验显式写出 "`<source>` 无校验"；整条 flow 都没校验写 "路径上无校验"。
 
 ### `methods-verified.md`
 
