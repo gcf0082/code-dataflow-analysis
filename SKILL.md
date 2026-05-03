@@ -24,32 +24,27 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 
 ### Step 2 — Sinks
 
-每个 sink 的 **类别** 字段必填，从下表枚举中选取一项；不在此表或边界模糊的，标 `[未解析]` 并写入 Open Questions。**默认影响等级**跟随类别——仅 **反序列化** 与 **日志写入** 两类影响按上下文判定（信源是否可信 / 是否外发），其他类别不允许按上下文覆盖。
+每个 sink 的 **类别** 字段必填，从下表枚举中选取一项；不在此表或边界模糊的，标 `[未解析]` 并写入 Open Questions。**默认影响等级**跟随类别——仅 **反序列化** 一类按上下文判定（信源是否可信），其他类别不允许按上下文覆盖。
 
 | 类别 | 默认影响 | 行为示例 |
 |---|---|---|
-| 命令执行 | 高 | shell exec / spawn / 加载动态库 |
-| 动态代码执行 | 高 | `eval` / 反射构造 / 动态加载类 |
-| 反序列化 | 高（不可信源）/ 低（可信本地）| JSON / YAML / XML / pickle 等解析 |
-| 文件写入 | 高 | write / append |
-| 文件删除 | 高 | delete |
-| 文件改属性 | 高 | chmod / chown / 设置时间戳 |
-| 文件链接创建 | 高 | symlink / hardlink |
-| 文件改名移动 | 高 | rename / move |
-| 文件解压 | 高 | unzip / untar |
-| 文件读取 | 中 | read |
-| 数据库写入 | 高 | INSERT / UPDATE / DELETE / NoSQL put |
+| 执行命令 | 高 | shell exec / spawn / 进程启动 |
+| 反序列化 | 高（不可信源）/ 低（可信本地）| JSON / YAML / XML / pickle / Java native ser 等解析 |
+| 写文件 | 高 | write / append |
+| 读文件 | 中 | read |
+| 创建文件 | 高 | create / touch |
+| 删除文件 | 高 | delete / unlink |
+| 文件改名 | 高 | rename / move |
+| 获取目录列表 | 低 | listdir / scandir |
+| 创建目录 | 中 | mkdir |
+| 删除目录 | 高 | rmdir |
 | 数据库查询 | 中 | SELECT / NoSQL get |
-| 网络发送 | 高 | HTTP/TCP/UDP 发起 / 连接外部 |
-| 网络监听 | 低 | bind / listen |
-| 鉴权变更 | 高 | 签发 token / 改 session / 改 ACL |
-| 鉴权读取 | 低 | 消费身份判定 |
-| 模板渲染输出 | 高 | 模板渲染 / HTML/SQL 拼接输出 |
-| 内部 RPC | 中 | 内部服务调用 |
-| 缓存写入 | 中 | 缓存 set |
-| 日志写入 | 中（外发）/ 低（本地）| 写日志 |
-| 配置读取 | 低 | 读 properties / yaml |
-| 指标上报 | 中 | metrics push |
+| 数据库写 | 高 | INSERT / UPDATE / DELETE / NoSQL put |
+| 建立网络连接 | 中 | TCP connect / socket open |
+| 发送网络请求 | 高 | TCP/UDP 发送数据 |
+| 发送 HTTP 请求 | 高 | HTTP request |
+| 加密 | 中 | encrypt |
+| 解密 | 中 | decrypt |
 
 **所有命中的 sink 都要列出**，与本次 source 无关的在条目末尾注明理由（`*(无污点：<理由>)*`），便于读者确认你考察过它。
 
@@ -133,13 +128,13 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 - S4：HTTP 请求体字段 `payload.note`，引入于 `src/main/java/com/example/FileHandler.java:31`（来源=HTTP 请求体）
 
 ## 命中的关键操作点（Sinks）
-- K1：文件删除 [影响=高] — `Files.delete(target)` 位于 `src/main/java/com/example/PathBuilder.java:18`
-- K2：命令执行 [影响=高] — `Runtime.getRuntime().exec(cmd)` 位于 `src/main/java/com/example/Runner.java:42`
-- K3：文件写入 [影响=高] — `Files.write(logPath, bytes)` 位于 `src/main/java/com/example/AuditLog.java:27`  *(无污点：`logPath` 由常量 `LOG_DIR` 与当前进程 PID 拼接，没有 source 流入)*
+- K1：删除文件 [影响=高] — `Files.delete(target)` 位于 `src/main/java/com/example/PathBuilder.java:18`
+- K2：执行命令 [影响=高] — `Runtime.getRuntime().exec(cmd)` 位于 `src/main/java/com/example/Runner.java:42`
+- K3：写文件 [影响=高] — `Files.write(logPath, bytes)` 位于 `src/main/java/com/example/AuditLog.java:27`  *(无污点：`logPath` 由常量 `LOG_DIR` 与当前进程 PID 拼接，没有 source 流入)*
 
 ## 传播路径索引
-- F1：{S1, S2} → K1（文件删除）— 详见 `flow-F1.md`
-- F2：S4 → K2（命令执行）— 详见 `flow-F2.md`
+- F1：{S1, S2} → K1（删除文件）— 详见 `flow-F1.md`
+- F2：S4 → K2（执行命令）— 详见 `flow-F2.md`
 
 > 简单情形（单文件 `report.md`）：把上面索引替换为各 flow 的完整章节内联展开（结构见下方 flow 文件模板的"业务意图"以下部分）。
 
@@ -154,12 +149,12 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 ### `flow-Fx.md`
 
 ```markdown
-# Flow F1：{S1, S2} → K1（文件删除）
+# Flow F1：{S1, S2} → K1（删除文件）
 
 ## 摘要
 - Source S1：参数 `userId`（String），引入于 `UserFileService.java:23`
 - Source S2：参数 `name`（String），引入于 `UserFileService.java:23`
-- Sink K1：`Files.delete(target)` 位于 `PathBuilder.java:18`，类别=文件删除，影响=高
+- Sink K1：`Files.delete(target)` 位于 `PathBuilder.java:18`，类别=删除文件，影响=高
 - 调用链：`UserFileService#deleteUserFile` → `PathBuilder#buildAndRemove`
 - 合并理由：`userId` 与 `name` 共同决定要删的文件位置，沿同一条调用链流向同一个 sink，拆开会反复重述同一段链路。
 
@@ -192,13 +187,13 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 ```markdown
 # 极简数据流报告：UserFileService.deleteUserFile
 
-## F1：{userId, name} → 文件删除 (Files.delete) [影响=高]
+## F1：{userId, name} → 删除文件 (Files.delete) [影响=高]
 - **Sink** `PathBuilder.java:18`：`Files.delete(Paths.get("/var/data", userId, name))`
 - **校验**：
   - `UserFileService.java:24`：`if (name.contains("..")) throw new IllegalArgumentException(...)`
   - `userId` 无校验
 
-## F2：payload.note → 命令执行 (Runtime.exec) [影响=高]
+## F2：payload.note → 执行命令 (Runtime.exec) [影响=高]
 - **Sink** `Runner.java:42`：`Runtime.getRuntime().exec(cmd)`
 - **校验**：路径上无校验
 ```
