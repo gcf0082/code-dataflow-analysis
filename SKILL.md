@@ -31,10 +31,13 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 | 执行命令 | 高 | shell exec / spawn / 进程启动 |
 | 反序列化 | 高（不可信源）/ 低（可信本地）| JSON / YAML / XML / pickle / Java native ser 等解析 |
 | 写文件 | 高 | write / append |
+| 其他写文件 | 高 | 上表未涵盖的文件写（如 mmap 写、扩展属性、特殊设备） |
 | 读文件 | 中 | read |
+| 其他读文件 | 中 | 上表未涵盖的文件读 |
 | 创建文件 | 高 | create / touch |
 | 删除文件 | 高 | delete / unlink |
 | 文件改名 | 高 | rename / move |
+| 修改文件权限 | 高 | chmod / chown / 设置 ACL |
 | 获取目录列表 | 低 | listdir / scandir |
 | 创建目录 | 中 | mkdir |
 | 删除目录 | 高 | rmdir |
@@ -43,6 +46,10 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 | 建立网络连接 | 中 | TCP connect / socket open |
 | 发送网络请求 | 高 | TCP/UDP 发送数据 |
 | 发送 HTTP 请求 | 高 | HTTP request |
+| sftp 写操作 | 高 | sftp put / 远端写入 |
+| sftp 读操作 | 中 | sftp get / 远端读取 |
+| 其他网络写 | 高 | 上表未涵盖的对外写 |
+| 其他网络读 | 中 | 上表未涵盖的对外读 |
 | 加密 | 中 | encrypt |
 | 解密 | 中 | decrypt |
 
