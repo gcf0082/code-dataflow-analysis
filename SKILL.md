@@ -35,6 +35,8 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 | 读文件 | 中 | read |
 | 其他读文件 | 中 | 上表未涵盖的文件读 |
 | 创建文件 | 高 | create / touch |
+| 复制文件 | 高 | copy / sendfile / `cp` |
+| 解压文件 | 高 | unzip / tar 解包 / archive extract |
 | 删除文件 | 高 | delete / unlink |
 | 文件改名 | 高 | rename / move |
 | 修改文件权限 | 高 | chmod / chown / 设置 ACL |
