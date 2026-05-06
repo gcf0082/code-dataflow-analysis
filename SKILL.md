@@ -132,19 +132,28 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 - 语言：java
 
 ## 输入源（Sources）
-- S1：参数 `userId`（类型=String，来源=方法形参）
-- S2：参数 `name`（类型=String，来源=方法形参）
-- S3：环境变量 `APP_BASE_DIR`，读取于 `src/main/java/com/example/Config.java:14`（来源=环境）
-- S4：HTTP 请求体字段 `payload.note`，引入于 `src/main/java/com/example/FileHandler.java:31`（来源=HTTP 请求体）
+
+| ID | 名称 | 类型 | 引入位置 | 来源 |
+|---|---|---|---|---|
+| S1 | `userId` | String | `UserFileService.java:23` | 方法形参 |
+| S2 | `name` | String | `UserFileService.java:23` | 方法形参 |
+| S3 | `APP_BASE_DIR` | String | `Config.java:14` | 环境变量 |
+| S4 | `payload.note` | String | `FileHandler.java:31` | HTTP 请求体 |
 
 ## 命中的关键操作点（Sinks）
-- K1：删除文件 [影响=高] — `Files.delete(target)` 位于 `src/main/java/com/example/PathBuilder.java:18`
-- K2：执行命令 [影响=高] — `Runtime.getRuntime().exec(cmd)` 位于 `src/main/java/com/example/Runner.java:42`
-- K3：写文件 [影响=高] — `Files.write(logPath, bytes)` 位于 `src/main/java/com/example/AuditLog.java:27`  *(无污点：`logPath` 由常量 `LOG_DIR` 与当前进程 PID 拼接，没有 source 流入)*
+
+| ID | 类别 | 影响 | 调用 | 位置 | 备注 |
+|---|---|---|---|---|---|
+| K1 | 删除文件 | 高 | `Files.delete(target)` | `PathBuilder.java:18` | — |
+| K2 | 执行命令 | 高 | `Runtime.getRuntime().exec(cmd)` | `Runner.java:42` | — |
+| K3 | 写文件 | 高 | `Files.write(logPath, bytes)` | `AuditLog.java:27` | 无污点：`logPath` 由常量 `LOG_DIR` 与当前进程 PID 拼接 |
 
 ## 传播路径索引
-- F1：{S1, S2} → K1（删除文件）— 详见 `flow-F1.md`
-- F2：S4 → K2（执行命令）— 详见 `flow-F2.md`
+
+| ID | Sources | Sink | 类别 | 影响 | 详情 |
+|---|---|---|---|---|---|
+| F1 | {S1, S2} | K1 | 删除文件 | 高 | `flow-F1.md` |
+| F2 | S4 | K2 | 执行命令 | 高 | `flow-F2.md` |
 
 > 简单情形（单文件 `report.md`）：把上面索引替换为各 flow 的完整章节内联展开（结构见下方 flow 文件模板的"业务意图"以下部分）。
 
@@ -172,16 +181,27 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 该方法负责按 `userId` 定位用户在数据目录下的子目录，再删除其中名为 `name` 的文件。链路上 `name.contains("..")` 用于阻止跨目录引用；`Paths.get(BASE_DIR, userId, name)` 把最终路径锚定在常量基目录 `/var/data` 之下；`userId` 直接参与路径拼接，路径上未观察到对它的校验。
 
 ## 步骤
-1. `UserFileService.java:24` — `if (name.contains("..")) throw new IllegalArgumentException(...)`（校验 `name`：包含 ".." 时抛出 IllegalArgumentException，命中 → 抛错；未命中 → 继续。`userId` 在该处未参与校验。）
-2. `UserFileService.java:27` — `PathBuilder.buildAndRemove(userId, name)`（跨方法调用，`userId` 与 `name` 同时跟随到形参 `u`、`n`）
-3. `PathBuilder.java:17` — `Path target = Paths.get(BASE_DIR, u, n)`（转换：与常量 `BASE_DIR="/var/data"` 三段拼接）
-4. `PathBuilder.java:18` — `Files.delete(target)`（命中 sink K1）
+
+| # | 位置 | 类型 | 动作 |
+|---|---|---|---|
+| 1 | `UserFileService.java:24` | 校验 | `if (name.contains("..")) throw new IllegalArgumentException(...)`（命中→抛错；未命中→继续；`userId` 此处未参与） |
+| 2 | `UserFileService.java:27` | 调用 | `PathBuilder.buildAndRemove(userId, name)`（跨方法，污点跟随到形参 `u`、`n`） |
+| 3 | `PathBuilder.java:17` | 转换 | `Path target = Paths.get(BASE_DIR, u, n)`（与常量 `BASE_DIR="/var/data"` 三段拼接） |
+| 4 | `PathBuilder.java:18` | sink | `Files.delete(target)`（命中 K1） |
+
+`类型` 为受控值：赋值 / 校验 / 转换 / 调用 / sink。
 
 ## 路径上的校验
-- V1 @ `UserFileService.java:24` — `name.contains("..")` 命中即抛 IllegalArgumentException（仅作用于 S2=`name`；S1=`userId` 路径上未观察到校验）
+
+| ID | 位置 | 表达式 | 命中处理 | 作用于 |
+|---|---|---|---|---|
+| V1 | `UserFileService.java:24` | `name.contains("..")` | 抛 IllegalArgumentException | S2=`name`（S1=`userId` 未参与） |
 
 ## 路径上的转换
-- T1 @ `PathBuilder.java:17` — 路径拼接：`Paths.get(<常量 "/var/data">, <带污点 userId>, <带污点 name>)`
+
+| ID | 位置 | 操作 | 表达式 |
+|---|---|---|---|
+| T1 | `PathBuilder.java:17` | 路径拼接 | `Paths.get(<常量 "/var/data">, <带污点 userId>, <带污点 name>)` |
 
 ## 到达 sink 时的最终表达式
 `Files.delete(Paths.get("/var/data", userId, name))`，其中 `name` 前置经过 V1，`userId` 未经过校验。
