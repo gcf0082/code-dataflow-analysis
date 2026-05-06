@@ -8,7 +8,7 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 ## 基本原则
 
 1. **语言无关**。
-2. **只陈述事实，不下安全结论**；是否构成风险由人工判断。
+2. **默认不下安全结论**；仅当代码 100% 可证时给明确判定（**确认存在 / 确认不存在**），其余一律标 **无法确认**，留人工。
 3. **完备性 > 简洁性**：多 source / 多 sink / 多路径全部列出。
 4. **不确定的诚实标注**：用 `[未解析]` / `[外部]` / `[动态]` 等中文标签，不要瞎猜。
 
@@ -80,7 +80,30 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 
 #### (c) 业务意图（每条 flow 必填）
 
-每条 flow 用 1–3 句自然语言说明在业务上做什么、关键校验/转换在该业务里扮演什么角色；多 source 时分别说明各自角色。**不评价是否充分或安全。**
+每条 flow 用 1–3 句自然语言说明在业务上做什么、关键校验/转换在该业务里扮演什么角色；多 source 时分别说明各自角色。**默认不评价是否充分或安全；仅当代码 100% 可证时在判定字段里给一句结论。**
+
+### (d) 安全判定（每条 flow 必填，三值枚举）
+
+每条 flow 给一个判定字段，取值之一：**确认存在 / 确认不存在 / 无法确认**。**默认无法确认**——任何含糊地带都归此档。
+
+仅在以下"100% 可证"情形下打前两档（必须给依据）：
+
+**确认存在**（典型形态）：
+- 外部输入字面拼接到 `Runtime.exec` / `eval` / SQL 字符串，无任何编码 / 转义 / 参数化
+- 外部输入直接作为 `Files.delete` / `unlink` 的路径，无规范化、无前缀锁定
+- 不可信源 → `ObjectInputStream.readObject` / `pickle.load` / `yaml.load`
+
+**确认不存在**（典型形态）：
+- sink 目标是字面量或纯常量拼接，无 source 流入
+- 使用标准参数化 API（如 `PreparedStatement` + `setX`），且参数化形态结构性完整
+- source 在到达 sink 前经过项目内**已 verified**（在 `methods-verified.md` 里有记录）的安全 sanitizer，且该 sanitizer 的契约覆盖此处用法
+
+**100% 准则**——必须满足：
+- 论据全部来自被分析代码本身，不依赖三方库语义假设、不依赖运行时配置、不依赖外部数据可信度推测
+- 论据结构性可见
+- 任何"看起来像但需要再核对"的情形都归入「无法确认」
+
+**Sink 整体判定 = 衍生**：取该 sink 接收的所有 flow 判定的"最严"——任一 flow 是「确认存在」则 sink 标「确认存在」；全部 flow 是「确认不存在」且无未审 flow 则 sink 标「确认不存在」；其他归「无法确认」。
 
 ### Step 4 — 相关 Source 合并
 
@@ -147,18 +170,18 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 
 ## 命中的关键操作点（Sinks）
 
-| ID | 类别 | 影响 | 调用 | 位置 | 备注 |
-|---|---|---|---|---|---|
-| K1 | 删除文件 | 高 | `Files.delete(target)` | `PathBuilder.java:18` | — |
-| K2 | 执行命令 | 高 | `Runtime.getRuntime().exec(cmd)` | `Runner.java:42` | — |
-| K3 | 写文件 | 高 | `Files.write(logPath, bytes)` | `AuditLog.java:27` | 无污点：`logPath` 由常量 `LOG_DIR` 与当前进程 PID 拼接 |
+| ID | 类别 | 影响 | 判定 | 调用 | 位置 | 备注 |
+|---|---|---|---|---|---|---|
+| K1 | 删除文件 | 高 | 无法确认 | `Files.delete(target)` | `PathBuilder.java:18` | — |
+| K2 | 执行命令 | 高 | 确认存在 | `Runtime.getRuntime().exec(cmd)` | `Runner.java:42` | — |
+| K3 | 写文件 | 高 | 确认不存在 | `Files.write(logPath, bytes)` | `AuditLog.java:27` | 无污点：`logPath` 由常量 `LOG_DIR` 与当前进程 PID 拼接 |
 
 ## 传播路径索引
 
-| ID | Sources | Sink | 类别 | 影响 | 详情 |
-|---|---|---|---|---|---|
-| F1 | {S1, S2} | K1 | 删除文件 | 高 | `flow-F1.md` |
-| F2 | S4 | K2 | 执行命令 | 高 | `flow-F2.md` |
+| ID | Sources | Sink | 类别 | 影响 | 判定 | 详情 |
+|---|---|---|---|---|---|---|
+| F1 | {S1, S2} | K1 | 删除文件 | 高 | 无法确认 | `flow-F1.md` |
+| F2 | S4 | K2 | 执行命令 | 高 | 确认存在 | `flow-F2.md` |
 
 > 简单情形（单文件 `report.md`）：把上面索引替换为各 flow 的完整章节内联展开（结构见下方 flow 文件模板的"业务意图"以下部分）。
 
@@ -181,6 +204,7 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 - Sink K1：`Files.delete(target)` 位于 `PathBuilder.java:18`，类别=删除文件，影响=高
 - 调用链：`UserFileService#deleteUserFile` → `PathBuilder#buildAndRemove`
 - 合并理由：`userId` 与 `name` 共同决定要删的文件位置，沿同一条调用链流向同一个 sink，拆开会反复重述同一段链路。
+- 判定：无法确认 — `name` 经 V1 拒绝 `..`，但未做规范化也未锁定 base 前缀；`userId` 路径上无校验；当前函数为方法形参，无法仅凭代码本身 100% 断言上层是否已校验。
 
 ## 业务意图
 该方法负责按 `userId` 定位用户在数据目录下的子目录，再删除其中名为 `name` 的文件。链路上 `name.contains("..")` 用于阻止跨目录引用；`Paths.get(BASE_DIR, userId, name)` 把最终路径锚定在常量基目录 `/var/data` 之下；`userId` 直接参与路径拼接，路径上未观察到对它的校验。
@@ -257,17 +281,18 @@ graph TD
     S4 --> K2
 
     classDef src fill:#dff,stroke:#069
-    classDef high fill:#f99,stroke:#900
-    classDef mid fill:#ffd,stroke:#960
-    classDef low fill:#eee,stroke:#999
+    classDef vuln fill:#f99,stroke:#900,stroke-width:2px
+    classDef safe fill:#9f9,stroke:#090
+    classDef unknown fill:#fff,stroke:#666
 
     class S1,S2,S4 src
-    class K1,K2 high
+    class K1 unknown
+    class K2 vuln
 ```
 
 读图约定：
 - **形状**：矩形=source、菱形=校验、圆角矩形=转换、带阴影矩形=sink。
-- **配色**：source 蓝；sink 按影响 encode（高=红 high、中=黄 mid、低=灰 low）；校验/转换默认色。
+- **配色**：source 蓝；**sink 按判定 encode**——`vuln`（红，确认存在）/ `safe`（绿，确认不存在）/ `unknown`（白底默认，无法确认）。校验/转换默认色。**影响等级在 sink label 文字 `[影响=高]` 里保留**，不与判定颜色冲突。
 - **代码块注释**：用 `%% Flow Fx: ... → Kn` 分段维护每条 flow 的连边，便于追加。
 
 **超阈值分拆**：图里**节点数 ≥ 12** 时，按 **sink 切分**——每个 sink 一个 `graph-K<n>.md`，里面只画通向该 sink 的 source / V / T 子图。`graph.md` 退化为索引页：
@@ -290,13 +315,13 @@ graph TD
 ```markdown
 # 极简数据流报告：UserFileService.deleteUserFile
 
-## F1：{userId, name} → 删除文件 (Files.delete) [影响=高]
+## F1：{userId, name} → 删除文件 (Files.delete) [影响=高] [判定=无法确认]
 - **Sink** `PathBuilder.java:18`：`Files.delete(Paths.get("/var/data", userId, name))`
 - **校验**：
   - `UserFileService.java:24`：`if (name.contains("..")) throw new IllegalArgumentException(...)`
   - `userId` 无校验
 
-## F2：payload.note → 执行命令 (Runtime.exec) [影响=高]
+## F2：payload.note → 执行命令 (Runtime.exec) [影响=高] [判定=确认存在]
 - **Sink** `Runner.java:42`：`Runtime.getRuntime().exec(cmd)`
 - **校验**：路径上无校验
 ```
@@ -330,5 +355,5 @@ graph TD
 ## 风格与禁忌
 
 - **不要**给修复建议。
-- **不要**在事实里夹议论；提示统一放在 `Open Questions` 中以问题形式表述。
+- **不要**在事实里夹议论；提示统一放在 `Open Questions` 中以问题形式表述。判定（确认存在/确认不存在）独立成字段，不混入事实陈述。
 - **不要**用模糊量词（"很多"、"大量"、"看起来"）。具体到 `文件:行` 和表达式。
