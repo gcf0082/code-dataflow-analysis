@@ -104,6 +104,7 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
   ```
   <function>-dataflow/
   ├── summary.md          # 极简版（永远生成）
+  ├── graph.md            # 传播链路总图（永远生成）
   ├── index.md            # 入口、Sources、Sinks、Flow 索引、Unreached、Open Questions
   ├── flow-F1.md          # 单条 Flow 完整描述，自包含
   ├── flow-F2.md
@@ -111,9 +112,9 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
   └── ...
   ```
 
-简单情形下目录里同时有 `report.md` 与 `summary.md`；`methods-verified.md` 也单独成文件，不内联到 `report.md`——固定命名便于跨任务复用。
+简单情形下目录里同时有 `report.md` / `summary.md` / `graph.md`；`methods-verified.md` 也单独成文件，不内联到 `report.md`——固定命名便于跨任务复用。
 
-每分析完一条 flow / 一个独立小模块 / 一次方法核对就**立即落盘**，不要囤到最后。每条 flow 完成时，对应的极简块同时追写到 `summary.md`。
+每分析完一条 flow / 一个独立小模块 / 一次方法核对就**立即落盘**，不要囤到最后。每条 flow 完成时，对应的极简块同时追写到 `summary.md`，相关节点和连边同时追写到 `graph.md`。
 
 每个 `flow-Fx.md` **自包含**：重述本条涉及的 source / sink 摘要、调用链、步骤、校验、转换、最终表达式，不依赖 `index.md` 也能独立看懂。多条 flow 共用同一段代码时各自展开，让 flow 之间互不干扰。
 
@@ -121,7 +122,7 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 
 ## 输出格式（每个文件的结构必须严格遵守，示例使用 Java）
 
-`flow-Fx.md` 中的传播链路图使用 Mermaid `graph TD` 语法，GitHub / GitLab / 大多数 Markdown 阅读器内嵌渲染。
+`graph.md` 使用 Mermaid `graph TD` 语法，GitHub / GitLab / 大多数 Markdown 阅读器内嵌渲染。
 
 ### `index.md`（或简单情形下的 `report.md`）
 
@@ -182,36 +183,6 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 ## 业务意图
 该方法负责按 `userId` 定位用户在数据目录下的子目录，再删除其中名为 `name` 的文件。链路上 `name.contains("..")` 用于阻止跨目录引用；`Paths.get(BASE_DIR, userId, name)` 把最终路径锚定在常量基目录 `/var/data` 之下；`userId` 直接参与路径拼接，路径上未观察到对它的校验。
 
-## 传播链路图
-
-```mermaid
-graph TD
-    S1["S1: userId<br/>UserFileService.java:23"]
-    S2["S2: name<br/>UserFileService.java:23"]
-    V1{"V1: name.contains('..')<br/>UserFileService.java:24"}
-    X1(["抛 IllegalArgumentException"])
-    T1("T1: target = '/var/data' + userId + name<br/>PathBuilder.java:17")
-    K1[["K1: 删除文件 [影响=高]<br/>Files.delete(target)<br/>PathBuilder.java:18"]]
-
-    S2 --> V1
-    V1 -->|命中| X1
-    V1 -->|未命中| T1
-    S1 --> T1
-    T1 --> K1
-
-    classDef src fill:#dff,stroke:#069
-    classDef high fill:#f99,stroke:#900
-    classDef mid fill:#ffd,stroke:#960
-    classDef low fill:#eee,stroke:#999
-    class S1,S2 src
-    class K1 high
-```
-
-读图约定：
-- **形状**：矩形=source、菱形=校验、圆角矩形=转换、带阴影矩形=sink、椭圆=抛错/中止。校验节点画出"命中/未命中"两条出边。
-- **配色**：只 source 与 sink 上色，校验/转换默认色——颜色服务于"哪些是入口/落点"。Sink 按影响等级 encode：**高=红（high）/ 中=黄（mid）/ 低=灰（low）**，对应 `classDef` 同名类，按 sink 的影响给 `class Kx <类名>`。
-- Unreached 的 source 不进图，统一在 `index.md` 的 Unreached 部分说明。
-
 ## 步骤
 
 | # | 位置 | 类型 | 动作 |
@@ -241,6 +212,59 @@ graph TD
 ## 备注
 无。
 ```
+
+### `graph.md`（永远生成）
+
+整次分析的传播链路总图：所有 source、所有 sink、所有中间校验/转换节点画在一张 Mermaid `graph TD` 上，跨 flow 的连接性能在同一画布看到。Unreached source 与 Untainted sink 同样进图，但视觉上弱化（虚线边框、淡化填充），与"完整列出所有 sink"原则一致。
+
+```mermaid
+graph TD
+    %% Sources
+    S1["S1: userId<br/>UserFileService.java:23"]
+    S2["S2: name<br/>UserFileService.java:23"]
+    S3["S3: APP_BASE_DIR<br/>Config.java:14"]
+    S4["S4: payload.note<br/>FileHandler.java:31"]
+
+    %% Validations & Transformations
+    V1{"V1: name.contains('..')<br/>UserFileService.java:24"}
+    X1(["抛 IllegalArgumentException"])
+    T1("T1: target = '/var/data' + userId + name<br/>PathBuilder.java:17")
+
+    %% Sinks
+    K1[["K1: 删除文件 [影响=高]<br/>Files.delete(target)<br/>PathBuilder.java:18"]]
+    K2[["K2: 执行命令 [影响=高]<br/>Runtime.getRuntime().exec(cmd)<br/>Runner.java:42"]]
+    K3[["K3: 写文件 [影响=高] (无污点)<br/>Files.write(logPath, bytes)<br/>AuditLog.java:27"]]
+
+    %% F1: {S1, S2} → K1
+    S1 --> T1
+    S2 --> V1
+    V1 -->|命中| X1
+    V1 -->|未命中| T1
+    T1 --> K1
+
+    %% F2: S4 → K2
+    S4 --> K2
+
+    %% S3 unreached, K3 untainted: 无连边
+
+    classDef src fill:#dff,stroke:#069
+    classDef srcUnreached fill:#eef,stroke:#99c,color:#669,stroke-dasharray:3 3
+    classDef high fill:#f99,stroke:#900
+    classDef mid fill:#ffd,stroke:#960
+    classDef low fill:#eee,stroke:#999
+    classDef untainted fill:#fff,stroke:#999,color:#999,stroke-dasharray:3 3
+
+    class S1,S2,S4 src
+    class S3 srcUnreached
+    class K1,K2 high
+    class K3 untainted
+```
+
+读图约定：
+- **形状**：矩形=source、菱形=校验、圆角矩形=转换、带阴影矩形=sink、椭圆=抛错/中止。校验节点画出"命中/未命中"两条出边。
+- **配色**：source 蓝；sink 按影响 encode（高=红 high、中=黄 mid、低=灰 low）；校验/转换默认色。
+- **虚线边框**：unreached source（蓝灰虚框 `srcUnreached`）、untainted sink（白底虚框 `untainted`）——视觉弱化，表示"考察过但不在主路径上"。
+- **代码块注释**：用 `%% Flow Fx: ... → Kn` 分段维护每条 flow 的连边，便于追加。
 
 ### `summary.md`（永远生成）
 
