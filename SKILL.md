@@ -110,8 +110,7 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
   ├── index.md            # 入口、Sources、Sinks、Flow 索引、Unreached、Open Questions
   ├── flow-F1.md          # 单条 Flow 完整描述，自包含
   ├── flow-F2.md
-  ├── methods-verified.md # 可选：方法核对记录（追加增量）
-  └── ...
+  └── methods-verified.md # 可选：方法核对记录（追加增量）
   ```
 
 简单情形下目录里同时有 `report.md` / `summary.md` / `graph.md`；`methods-verified.md` 也单独成文件，不内联到 `report.md`——固定命名便于跨任务复用。
@@ -189,7 +188,7 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 
 | # | 位置 | 类型 | 动作 |
 |---|---|---|---|
-| 1 | `UserFileService.java:24` | 校验 | `if (name.contains("..")) throw new IllegalArgumentException(...)`（命中→抛错；未命中→继续；`userId` 此处未参与） |
+| 1 | `UserFileService.java:24` | 校验 | `if (name.contains("..")) throw new IllegalArgumentException("bad name")`（命中→抛错；未命中→继续；`userId` 此处未参与） |
 | 2 | `UserFileService.java:27` | 调用 | `PathBuilder.buildAndRemove(userId, name)`（跨方法，污点跟随到形参 `u`、`n`） |
 | 3 | `PathBuilder.java:17` | 转换 | `Path target = Paths.get(BASE_DIR, u, n)`（与常量 `BASE_DIR="/var/data"` 三段拼接） |
 | 4 | `PathBuilder.java:18` | sink | `Files.delete(target)`（命中 K1） |
@@ -292,7 +291,7 @@ graph TD
 ## F1：{userId, name} → 删除文件 (Files.delete) [影响=高]
 - **Sink** `PathBuilder.java:18`：`Files.delete(Paths.get("/var/data", userId, name))`
 - **校验**：
-  - `UserFileService.java:24`：`if (name.contains("..")) throw new IllegalArgumentException(...)`
+  - `UserFileService.java:24`：`if (name.contains("..")) throw new IllegalArgumentException("bad name")`
   - `userId` 无校验
 
 ## F2：payload.note → 执行命令 (Runtime.exec) [影响=高]
