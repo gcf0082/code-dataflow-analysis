@@ -121,6 +121,8 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 
 ## 输出格式（每个文件的结构必须严格遵守，示例使用 Java）
 
+`flow-Fx.md` 中的传播链路图使用 Mermaid `graph TD` 语法，GitHub / GitLab / 大多数 Markdown 阅读器内嵌渲染。
+
 ### `index.md`（或简单情形下的 `report.md`）
 
 ```markdown
@@ -179,6 +181,35 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 
 ## 业务意图
 该方法负责按 `userId` 定位用户在数据目录下的子目录，再删除其中名为 `name` 的文件。链路上 `name.contains("..")` 用于阻止跨目录引用；`Paths.get(BASE_DIR, userId, name)` 把最终路径锚定在常量基目录 `/var/data` 之下；`userId` 直接参与路径拼接，路径上未观察到对它的校验。
+
+## 传播链路图
+
+```mermaid
+graph TD
+    S1["S1: userId<br/>UserFileService.java:23"]
+    S2["S2: name<br/>UserFileService.java:23"]
+    V1{"V1: name.contains('..')<br/>UserFileService.java:24"}
+    X1(["抛 IllegalArgumentException"])
+    T1("T1: target = '/var/data' + userId + name<br/>PathBuilder.java:17")
+    K1[["K1: 删除文件 [影响=高]<br/>Files.delete(target)<br/>PathBuilder.java:18"]]
+
+    S2 --> V1
+    V1 -->|命中| X1
+    V1 -->|未命中| T1
+    S1 --> T1
+    T1 --> K1
+
+    classDef src fill:#dff,stroke:#069
+    classDef gate fill:#fdf,stroke:#909
+    classDef xform fill:#ffd,stroke:#960
+    classDef sink fill:#fdd,stroke:#900
+    class S1,S2 src
+    class V1 gate
+    class T1 xform
+    class K1 sink
+```
+
+读图约定：矩形=source、菱形=校验、圆角矩形=转换、带阴影矩形=sink、椭圆=抛错/中止。校验节点画出"命中/未命中"两条出边。Unreached 的 source 不进图，统一在 `index.md` 的 Unreached 部分说明。
 
 ## 步骤
 
