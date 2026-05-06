@@ -104,7 +104,9 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
   ```
   <function>-dataflow/
   ├── summary.md          # 极简版（永远生成）
-  ├── graph.md            # 传播链路总图（永远生成）
+  ├── graph.md            # 传播链路图（节点 < 12）或索引页（≥ 12 时按 sink 分拆）
+  ├── graph-K1.md         # （仅当分拆时）按 sink 切的子图
+  ├── graph-K2.md
   ├── index.md            # 入口、Sources、Sinks、Flow 索引、Unreached、Open Questions
   ├── flow-F1.md          # 单条 Flow 完整描述，自包含
   ├── flow-F2.md
@@ -215,56 +217,76 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 
 ### `graph.md`（永远生成）
 
-整次分析的传播链路总图：所有 source、所有 sink、所有中间校验/转换节点画在一张 Mermaid `graph TD` 上，跨 flow 的连接性能在同一画布看到。Unreached source 与 Untainted sink 同样进图，但视觉上弱化（虚线边框、淡化填充），与"完整列出所有 sink"原则一致。
+**审计入口图**——只画对快速识别问题有增量信息的节点，**不求完备**（完备版在 `index.md` 的表与 `flow-Fx.md` 里已有）。
+
+**保留**：
+- 流到至少一个 sink 的 source（reached）
+- 至少有一条污点流到达的 sink（tainted）
+- **对内容有约束**的校验：字符串内容匹配（`contains`/`startsWith`/正则/白名单/黑名单）、规范化后比较（`realpath` + `startsWith(base)`）、签名/鉴权、自定义业务规则
+- **改 sink 表达式形态**的转换：与常量拼接（路径/URL/SQL）、编码/转义、解析、实际起过滤作用的截断/替换
+
+**丢弃**（硬过滤清单——这些**永不进图**，但仍在 `flow-Fx.md` 的表里完整记录）：
+- null 检查（`x == null` / `Objects.requireNonNull`）
+- 空串检查（`isEmpty` / `isBlank`）
+- 类型检查（`instanceof`）、长度下限（避免 IOB 用，非内容约束）
+- 解析格式失败提前 return（`Integer.parseInt` 抛 NFE 被 catch 等）
+- 纯类型转换（`String.valueOf` / `toString`）、内部字段拷贝、调试性 `trim`
+- unreached source、untainted sink
+
+**阻断节点共享**：所有"命中即抛错/return"的终止分支统一指向一个 `Block` 节点，不为每条校验单独画椭圆。
 
 ```mermaid
 graph TD
-    %% Sources
     S1["S1: userId<br/>UserFileService.java:23"]
     S2["S2: name<br/>UserFileService.java:23"]
-    S3["S3: APP_BASE_DIR<br/>Config.java:14"]
     S4["S4: payload.note<br/>FileHandler.java:31"]
 
-    %% Validations & Transformations
     V1{"V1: name.contains('..')<br/>UserFileService.java:24"}
-    X1(["抛 IllegalArgumentException"])
     T1("T1: target = '/var/data' + userId + name<br/>PathBuilder.java:17")
 
-    %% Sinks
     K1[["K1: 删除文件 [影响=高]<br/>Files.delete(target)<br/>PathBuilder.java:18"]]
     K2[["K2: 执行命令 [影响=高]<br/>Runtime.getRuntime().exec(cmd)<br/>Runner.java:42"]]
-    K3[["K3: 写文件 [影响=高] (无污点)<br/>Files.write(logPath, bytes)<br/>AuditLog.java:27"]]
+
+    Block(((阻断)))
 
     %% F1: {S1, S2} → K1
     S1 --> T1
     S2 --> V1
-    V1 -->|命中| X1
+    V1 -->|命中| Block
     V1 -->|未命中| T1
     T1 --> K1
 
     %% F2: S4 → K2
     S4 --> K2
 
-    %% S3 unreached, K3 untainted: 无连边
-
     classDef src fill:#dff,stroke:#069
-    classDef srcUnreached fill:#eef,stroke:#99c,color:#669,stroke-dasharray:3 3
     classDef high fill:#f99,stroke:#900
     classDef mid fill:#ffd,stroke:#960
     classDef low fill:#eee,stroke:#999
-    classDef untainted fill:#fff,stroke:#999,color:#999,stroke-dasharray:3 3
+    classDef block fill:#eee,stroke:#999,color:#666
 
     class S1,S2,S4 src
-    class S3 srcUnreached
     class K1,K2 high
-    class K3 untainted
+    class Block block
 ```
 
 读图约定：
-- **形状**：矩形=source、菱形=校验、圆角矩形=转换、带阴影矩形=sink、椭圆=抛错/中止。校验节点画出"命中/未命中"两条出边。
+- **形状**：矩形=source、菱形=校验、圆角矩形=转换、带阴影矩形=sink、圆形=阻断终点（共享）。
 - **配色**：source 蓝；sink 按影响 encode（高=红 high、中=黄 mid、低=灰 low）；校验/转换默认色。
-- **虚线边框**：unreached source（蓝灰虚框 `srcUnreached`）、untainted sink（白底虚框 `untainted`）——视觉弱化，表示"考察过但不在主路径上"。
 - **代码块注释**：用 `%% Flow Fx: ... → Kn` 分段维护每条 flow 的连边，便于追加。
+
+**超阈值分拆**：图里**节点数 ≥ 12** 时，按 **sink 切分**——每个 sink 一个 `graph-K<n>.md`，里面只画通向该 sink 的 source / V / T 子图。`graph.md` 退化为索引页：
+
+```markdown
+# 传播链路图（已按 sink 分拆）
+
+节点数超过阈值，按 sink 切分：
+- `graph-K1.md` — 删除文件 [影响=高] ← {S1, S2}
+- `graph-K2.md` — 执行命令 [影响=高] ← {S4}
+- ...
+
+（unreached source / untainted sink 见 `index.md` 对应表，不进图）
+```
 
 ### `summary.md`（永远生成）
 
