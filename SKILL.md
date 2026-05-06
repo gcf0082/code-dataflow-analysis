@@ -104,7 +104,6 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
   ```
   <function>-dataflow/
   ├── summary.md          # 极简版（永远生成）
-  ├── pseudocode.md       # 伪代码函数（永远生成）
   ├── index.md            # 入口、Sources、Sinks、Flow 索引、Unreached、Open Questions
   ├── flow-F1.md          # 单条 Flow 完整描述，自包含
   ├── flow-F2.md
@@ -112,9 +111,9 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
   └── ...
   ```
 
-简单情形下目录里同时有 `report.md` / `summary.md` / `pseudocode.md`；`methods-verified.md` 也单独成文件，不内联到 `report.md`——固定命名便于跨任务复用。
+简单情形下目录里同时有 `report.md` 与 `summary.md`；`methods-verified.md` 也单独成文件，不内联到 `report.md`——固定命名便于跨任务复用。
 
-每分析完一条 flow / 一个独立小模块 / 一次方法核对就**立即落盘**，不要囤到最后。每条 flow 完成时，对应的极简块同时追写到 `summary.md` 与 `pseudocode.md`。
+每分析完一条 flow / 一个独立小模块 / 一次方法核对就**立即落盘**，不要囤到最后。每条 flow 完成时，对应的极简块同时追写到 `summary.md`。
 
 每个 `flow-Fx.md` **自包含**：重述本条涉及的 source / sink 摘要、调用链、步骤、校验、转换、最终表达式，不依赖 `index.md` 也能独立看懂。多条 flow 共用同一段代码时各自展开，让 flow 之间互不干扰。
 
@@ -234,50 +233,6 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 - 标题行：`## F<n>：{<source 标识符...>} → <sink 类别> (<最关键 API>) [影响=高/中/低]`。单 source 时去掉花括号。
 - **Sink** 行：位置 + sink 处的最终表达式形式（能一行写下就一行）。
 - **校验** 行：每条校验的位置和代码片段；某 source 路径上无校验显式写出 "`<source>` 无校验"；整条 flow 都没校验写 "路径上无校验"。
-
-### `pseudocode.md`（永远生成）
-
-把整次分析浓缩成**一个伪代码函数**：函数签名 = 所有 source；函数体 = 只保留参与 source→sink 传播的校验、转换、调用、sink；与污点无关的业务逻辑全部丢弃。给有安全知识的审计员"读一段代码"的视角。
-
-```pseudocode
-# 数据流伪代码：UserFileService.deleteUserFile
-
-function deleteUserFile(
-    userId: String,        # S1 param
-    name: String,          # S2 param
-    user: User             # 未传播
-):
-    # S3 = env APP_BASE_DIR (Config.java:14, 仅作常量前缀)
-    # S4 = HTTP body payload.note (FileHandler.java:31)
-
-    # ─── Flow F1: {S1, S2} → K1 ─────────────────────
-    if name.contains(".."):                          # V1 @ UserFileService.java:24
-        raise InvalidArg
-    target = "/var/data" + "/" + userId + "/" + name # T1 @ PathBuilder.java:17
-    sink K1[删除文件, 影响=高]:                      # @ PathBuilder.java:18
-        Files.delete(target)
-
-    # ─── Flow F2: S4 → K2 ───────────────────────────
-    # 路径上无校验
-    sink K2[执行命令, 影响=高]:                      # @ Runner.java:42
-        Runtime.exec(payload.note)
-
-    # ─── Sink K3 (无污点) ───────────────────────────
-    # logPath 由常量 LOG_DIR + 进程 PID 拼接，无 source 流入
-    sink K3[写文件, 影响=高, 无污点]:                # @ AuditLog.java:27
-        Files.write(LOG_DIR + "/" + pid, bytes)
-```
-
-语法约定（Python-ish，跨语言通用）：
-
-- 函数头：`function <entryName>(<param>: <type>, ...):`，每个 param 注释标 `# Sx <kind>` 或 `# 未传播`。
-- 非参数 source（env / HTTP / 文件读入等）以注释列在函数体顶部。
-- 每条 flow 一个块，块前用分隔注释标 `Flow Fx: <sources> → Kn`。
-- 校验：`if <expr>: <action>` + 注释 `# Vx @ 文件:行`。
-- 转换：`<lhs> = <rhs>` + 注释 `# Tx @ 文件:行`。
-- sink：`sink Kn[<类别>, 影响=<高/中/低>]:` 后跟一行 `<call>` + 注释 `# @ 文件:行`；与污点无关的 sink 标 `[..., 无污点]` 并简注理由。
-- 编号（S/V/T/K/F）跨文件一致——pseudocode 里的标号必须与 `index.md` / 各 `flow-Fx.md` 同步。
-- 调用链按线性序列展平；与污点完全无关的分支可折叠成单行注释。
 
 ### `methods-verified.md`
 
