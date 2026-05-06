@@ -233,7 +233,7 @@ description: 以一个函数为入口，使用数据流跟踪与调用链分析�
 - 纯类型转换（`String.valueOf` / `toString`）、内部字段拷贝、调试性 `trim`
 - unreached source、untainted sink
 
-**阻断节点共享**：所有"命中即抛错/return"的终止分支统一指向一个 `Block` 节点，不为每条校验单独画椭圆。
+**失败分支若退出入口函数则不画**：校验失败若导致 throw / return / sys.exit 退出入口函数（污点不再到达任何 sink），该失败边**省略不画**——校验节点本身保留，只画"通过/继续"出边。失败分支若去到别处（设置默认值、走另一条 sink、清理后继续等）才画出。这样读者眼睛只跟"到达 sink 的活路径"，死胡同不再占视觉。
 
 ```mermaid
 graph TD
@@ -247,13 +247,10 @@ graph TD
     K1[["K1: 删除文件 [影响=高]<br/>Files.delete(target)<br/>PathBuilder.java:18"]]
     K2[["K2: 执行命令 [影响=高]<br/>Runtime.getRuntime().exec(cmd)<br/>Runner.java:42"]]
 
-    Block(((阻断)))
-
     %% F1: {S1, S2} → K1
     S1 --> T1
     S2 --> V1
-    V1 -->|命中| Block
-    V1 -->|未命中| T1
+    V1 --> T1
     T1 --> K1
 
     %% F2: S4 → K2
@@ -263,15 +260,13 @@ graph TD
     classDef high fill:#f99,stroke:#900
     classDef mid fill:#ffd,stroke:#960
     classDef low fill:#eee,stroke:#999
-    classDef block fill:#eee,stroke:#999,color:#666
 
     class S1,S2,S4 src
     class K1,K2 high
-    class Block block
 ```
 
 读图约定：
-- **形状**：矩形=source、菱形=校验、圆角矩形=转换、带阴影矩形=sink、圆形=阻断终点（共享）。
+- **形状**：矩形=source、菱形=校验、圆角矩形=转换、带阴影矩形=sink。
 - **配色**：source 蓝；sink 按影响 encode（高=红 high、中=黄 mid、低=灰 low）；校验/转换默认色。
 - **代码块注释**：用 `%% Flow Fx: ... → Kn` 分段维护每条 flow 的连边，便于追加。
 
