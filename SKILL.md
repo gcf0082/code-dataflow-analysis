@@ -200,16 +200,17 @@ graph TD
     T1 --> K1
 
     classDef src fill:#dff,stroke:#069
-    classDef gate fill:#fdf,stroke:#909
-    classDef xform fill:#ffd,stroke:#960
-    classDef sink fill:#fdd,stroke:#900
+    classDef high fill:#f99,stroke:#900
+    classDef mid fill:#ffd,stroke:#960
+    classDef low fill:#eee,stroke:#999
     class S1,S2 src
-    class V1 gate
-    class T1 xform
-    class K1 sink
+    class K1 high
 ```
 
-读图约定：矩形=source、菱形=校验、圆角矩形=转换、带阴影矩形=sink、椭圆=抛错/中止。校验节点画出"命中/未命中"两条出边。Unreached 的 source 不进图，统一在 `index.md` 的 Unreached 部分说明。
+读图约定：
+- **形状**：矩形=source、菱形=校验、圆角矩形=转换、带阴影矩形=sink、椭圆=抛错/中止。校验节点画出"命中/未命中"两条出边。
+- **配色**：只 source 与 sink 上色，校验/转换默认色——颜色服务于"哪些是入口/落点"。Sink 按影响等级 encode：**高=红（high）/ 中=黄（mid）/ 低=灰（low）**，对应 `classDef` 同名类，按 sink 的影响给 `class Kx <类名>`。
+- Unreached 的 source 不进图，统一在 `index.md` 的 Unreached 部分说明。
 
 ## 步骤
 
