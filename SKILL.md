@@ -278,7 +278,6 @@ graph TD
 节点数超过阈值，按 sink 切分：
 - `graph-K1.md` — 删除文件 [影响=高] ← {S1, S2}
 - `graph-K2.md` — 执行命令 [影响=高] ← {S4}
-- ...
 
 （unreached source / untainted sink 见 `index.md` 对应表，不进图）
 ```
